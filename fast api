@@ -1,0 +1,64 @@
+from fastapi import FastAPI, Request
+from datetime import datetime
+
+app = FastAPI()
+
+trade_log = []
+portfolio = {
+    "cash": 1000.0,
+    "positions": {},
+    "equity_curve": []
+}
+
+@app.post("/webhook")
+async def paper_trade_listener(request: Request):
+    data = await request.json()
+    print("Received Alert:", data)
+
+    symbol = data.get("ticker")
+    price = float(data.get("price"))
+    side = data.get("side", "buy")
+    strategy = data.get("strategy")
+    time = data.get("time", datetime.utcnow().isoformat())
+
+    position_size = 100.0
+
+    if portfolio["cash"] >= position_size and side == "buy":
+        qty = round(position_size / price, 4)
+        portfolio["cash"] -= position_size
+        position = {
+            "symbol": symbol,
+            "qty": qty,
+            "entry_price": price,
+            "strategy": strategy,
+            "entry_time": time
+        }
+        portfolio["positions"][symbol] = position
+        trade_log.append({"action": "buy", **position})
+
+    elif side == "sell" and symbol in portfolio["positions"]:
+        position = portfolio["positions"].pop(symbol)
+        proceeds = position["qty"] * price
+        pnl = proceeds - (position["qty"] * position["entry_price"])
+        portfolio["cash"] += proceeds
+        trade_log.append({
+            "action": "sell",
+            "symbol": symbol,
+            "qty": position["qty"],
+            "entry_price": position["entry_price"],
+            "exit_price": price,
+            "pnl": round(pnl, 2),
+            "exit_time": time,
+            "strategy": strategy
+        })
+
+    equity = portfolio["cash"]
+    for pos in portfolio["positions"].values():
+        equity += pos["qty"] * price
+    portfolio["equity_curve"].append({"time": time, "equity": equity})
+
+    return {"status": "ok", "cash": portfolio["cash"], "positions": portfolio["positions"]}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000)
